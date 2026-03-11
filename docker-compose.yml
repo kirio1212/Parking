@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  db:
+    image: mariadb:10.11
+    container_name: smartparking-db
+    restart: always
+    environment:
+      MARIADB_ROOT_PASSWORD: rootpassword      # À changer
+      MARIADB_DATABASE: smartparking
+      MARIADB_USER: smartparking_user
+      MARIADB_PASSWORD: smartparking_pass      # À changer
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - smartparking-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 10s
+      retries: 5
+
+  app:
+    build: .
+    container_name: smartparking-app
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: smartparking_user
+      DB_PASSWORD: smartparking_pass
+      DB_NAME: smartparking
+      JWT_SECRET: ${JWT_SECRET:-une_chaine_tres_longue_et_secrete}
+      NODE_ENV: production
+    networks:
+      - smartparking-network
+
+volumes:
+  db_data:
+
+networks:
+  smartparking-network:

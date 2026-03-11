@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Parking - Dashboard</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="stylesheet" href="../css/dashboard.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="header-left">
+                <div class="logo">
+                    <span class="logo-icon">🅿️</span>
+                    <h1>Smart Parking</h1>
+                </div>
+            </div>
+            <nav class="nav">
+                <a href="#map" class="nav-link active" data-page="map">
+                    <span class="nav-icon">🗺️</span>
+                    Carte
+                </a>
+                <a href="#reservation" class="nav-link" data-page="reservation">
+                    <span class="nav-icon">📅</span>
+                    Réservation
+                </a>
+                <a href="#my-reservations" class="nav-link" data-page="my-reservations">
+                    <span class="nav-icon">🎫</span>
+                    Mes réservations
+                </a>
+                <a href="#profile" class="nav-link" data-page="profile">
+                    <span class="nav-icon">👤</span>
+                    Profil
+                </a>
+                <!-- Lien admin (visible uniquement pour admin) -->
+                <a href="#admin" class="nav-link admin-only hidden" data-page="admin">
+                    <span class="nav-icon">⚙️</span>
+                    Admin
+                </a>
+            </nav>
+            <div class="header-right">
+                <div class="user-info">
+                    <span id="userName">Utilisateur</span>
+                    <span id="userRole" class="user-role">Client</span>
+                </div>
+                <button id="logoutBtn" class="btn btn-secondary btn-small">
+                    <span class="btn-icon">🚪</span>
+                    Déconnexion
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+        <!-- PAGE: CARTE DES PLACES -->
+        <section id="map" class="page active">
+            <div class="container">
+                <h2 class="page-title">
+                    <span class="icon">🗺️</span>
+                    Carte du Parking
+                </h2>
+
+                <!-- Statistiques des places -->
+                <div class="stats-grid">
+                    <div class="stat-card free">
+                        <div class="stat-icon">✅</div>
+                        <div class="stat-content">
+                            <span class="stat-value" id="freeCount">0</span>
+                            <span class="stat-label">Places libres</span>
+                        </div>
+                    </div>
+                    <div class="stat-card occupied">
+                        <div class="stat-icon">🚗</div>
+                        <div class="stat-content">
+                            <span class="stat-value" id="occupiedCount">0</span>
+                            <span class="stat-label">Places occupées</span>
+                        </div>
+                    </div>
+                    <div class="stat-card reserved">
+                        <div class="stat-icon">📅</div>
+                        <div class="stat-content">
+                            <span class="stat-value" id="reservedCount">0</span>
+                            <span class="stat-label">Places réservées</span>
+                        </div>
+                    </div>
+                    <div class="stat-card total">
+                        <div class="stat-icon">🅿️</div>
+                        <div class="stat-content">
+                            <span class="stat-value" id="totalCount">10</span>
+                            <span class="stat-label">Total places</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Carte des places -->
+                <div class="parking-section">
+                    <div class="parking-map-container">
+                        <h3>Vue du parking</h3>
+                        <div class="parking-map" id="parkingMap">
+                            <!-- Les places seront générées par JS -->
+                        </div>
+                        <div class="legend">
+                            <div class="legend-item">
+                                <span class="legend-color free"></span>
+                                <span>Libre</span>
+                            </div>
+                            <div class="legend-item">
+                                <span class="legend-color occupied"></span>
+                                <span>Occupée</span>
+                            </div>
+                            <div class="legend-item">
+                                <span class="legend-color reserved"></span>
+                                <span>Réservée</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Détails de la place sélectionnée -->
+                    <div class="spot-details-container">
+                        <h3>Détails de la place</h3>
+                        <div id="spotDetails" class="spot-details">
+                            <p class="no-selection">Cliquez sur une place pour voir les détails</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tarifs -->
+                <div class="pricing-section">
+                    <h3>💰 Nos tarifs</h3>
+                    <div class="pricing-cards">
+                        <div class="pricing-card">
+                            <h4>30 minutes</h4>
+                            <span class="price">2€</span>
+                        </div>
+                        <div class="pricing-card">
+                            <h4>1 heure</h4>
+                            <span class="price">3€</span>
+                        </div>
+                        <div class="pricing-card">
+                            <h4>2 heures</h4>
+                            <span class="price">5€</span>
+                        </div>
+                        <div class="pricing-card">
+                            <h4>4 heures</h4>
+                            <span class="price">8€</span>
+                        </div>
+                        <div class="pricing-card">
+                            <h4>Journée</h4>
+                            <span class="price">15€</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- PAGE: RÉSERVATION -->
+        <section id="reservation" class="page hidden">
+            <div class="container">
+                <h2 class="page-title">
+                    <span class="icon">📅</span>
+                    Réserver une place
+                </h2>
+
+                <div class="reservation-form-container">
+                    <form id="reservationForm" class="reservation-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="resSpot">Place à réserver</label>
+                                <select id="resSpot" class="form-control" required>
+                                    <option value="">Choisir une place</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="resDate">Date</label>
+                                <input type="date" id="resDate" class="form-control" required>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="resStartTime">Heure d'arrivée</label>
+                                <select id="resStartTime" class="form-control" required>
+                                    <option value="">Choisir</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="resDuration">Durée</label>
+                                <select id="resDuration" class="form-control" required>
+                                    <option value="30">30 min - 2€</option>
+                                    <option value="60">1h - 3€</option>
+                                    <option value="120" selected>2h - 5€</option>
+                                    <option value="240">4h - 8€</option>
+                                    <option value="480">Journée (8h) - 15€</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="resVehicle">Plaque d'immatriculation</label>
+                            <input type="text" id="resVehicle" class="form-control" placeholder="AB-123-CD" required>
+                        </div>
+
+                        <div class="price-preview">
+                            <span>Prix total:</span>
+                            <span id="previewPrice" class="price-amount">5€</span>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-block">
+                            <span class="btn-icon">💳</span>
+                            Procéder au paiement
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Modal de paiement QR Code -->
+                <div id="paymentModal" class="modal hidden">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3>💳 Paiement</h3>
+                            <button class="modal-close" id="closePaymentModal">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="payment-summary">
+                                <h4>Récapitulatif</h4>
+                                <div class="summary-row">
+                                    <span>Place:</span>
+                                    <span id="paySpot">-</span>
+                                </div>
+                                <div class="summary-row">
+                                    <span>Date:</span>
+                                    <span id="payDate">-</span>
+                                </div>
+                                <div class="summary-row">
+                                    <span>Heure:</span>
+                                    <span id="payTime">-</span>
+                                </div>
+                                <div class="summary-row">
+                                    <span>Durée:</span>
+                                    <span id="payDuration">-</span>
+                                </div>
+                                <div class="summary-row total">
+                                    <span>Total:</span>
+                                    <span id="payTotal">-</span>
+                                </div>
+                            </div>
+
+                            <div class="qr-section">
+                                <p>Scannez ce QR code pour payer</p>
+                                <div id="qrcode"></div>
+                                <p class="qr-info">Ou utilisez le code: <strong id="paymentCode">-</strong></p>
+                            </div>
+
+                            <div class="payment-actions">
+                                <button id="confirmPaymentBtn" class="btn btn-success btn-block">
+                                    <span class="btn-icon">✅</span>
+                                    J'ai payé
+                                </button>
+                                <button id="cancelPaymentBtn" class="btn btn-secondary btn-block">
+                                    Annuler
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- PAGE: MES RÉSERVATIONS -->
+        <section id="my-reservations" class="page hidden">
+            <div class="container">
+                <h2 class="page-title">
+                    <span class="icon">🎫</span>
+                    Mes réservations
+                </h2>
+
+                <div id="myReservationsList" class="reservations-list">
+                    <!-- Généré par JS -->
+                </div>
+
+                <div id="noReservations" class="empty-state">
+                    <span class="empty-icon">📭</span>
+                    <p>Vous n'avez aucune réservation active</p>
+                    <a href="#reservation" class="btn btn-primary">Faire une réservation</a>
+                </div>
+            </div>
+        </section>
+
+        <!-- PAGE: PROFIL -->
+        <section id="profile" class="page hidden">
+            <div class="container">
+                <h2 class="page-title">
+                    <span class="icon">👤</span>
+                    Mon profil
+                </h2>
+
+                <div class="profile-container">
+                    <div class="profile-card">
+                        <div class="profile-header">
+                            <div class="profile-avatar">
+                                <span id="profileAvatar">👤</span>
+                            </div>
+                            <h3 id="profileName">-</h3>
+                            <span id="profileRole" class="role-badge">Client</span>
+                        </div>
+
+                        <form id="profileForm" class="profile-form">
+                            <div class="form-group">
+                                <label>Nom complet</label>
+                                <input type="text" id="profileNameInput" class="form-control" readonly>
+                            </div>
+                            <div class="form-group">
+                                <label>Email</label>
+                                <input type="email" id="profileEmailInput" class="form-control" readonly>
+                            </div>
+                            <div class="form-group">
+                                <label>Téléphone</label>
+                                <input type="tel" id="profilePhoneInput" class="form-control">
+                            </div>
+                            <div class="form-group">
+                                <label>Nouveau mot de passe</label>
+                                <input type="password" id="profileNewPassword" class="form-control" placeholder="Laisser vide pour ne pas changer">
+                            </div>
+                            <button type="submit" class="btn btn-primary">
+                                <span class="btn-icon">💾</span>
+                                Mettre à jour
+                            </button>
+                        </form>
+                    </div>
+
+                    <div class="profile-stats">
+                        <h3>Statistiques</h3>
+                        <div class="stats-cards">
+                            <div class="stat-box">
+                                <span class="stat-box-value" id="totalReservations">0</span>
+                                <span class="stat-box-label">Réservations totales</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-box-value" id="activeReservations">0</span>
+                                <span class="stat-box-label">Réservations actives</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-box-value" id="totalSpent">0€</span>
+                                <span class="stat-box-label">Total dépensé</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- PAGE: ADMIN (visible uniquement pour admin) -->
+        <section id="admin" class="page hidden admin-page">
+            <div class="container">
+                <h2 class="page-title">
+                    <span class="icon">⚙️</span>
+                    Administration
+                </h2>
+
+                <!-- Stats admin -->
+                <div class="admin-stats-grid">
+                    <div class="admin-stat">
+                        <span class="admin-stat-value" id="adminTotalUsers">0</span>
+                        <span class="admin-stat-label">Utilisateurs</span>
+                    </div>
+                    <div class="admin-stat">
+                        <span class="admin-stat-value" id="adminTotalReservations">0</span>
+                        <span class="admin-stat-label">Réservations</span>
+                    </div>
+                    <div class="admin-stat">
+                        <span class="admin-stat-value" id="adminTotalRevenue">0€</span>
+                        <span class="admin-stat-label">Revenus</span>
+                    </div>
+                    <div class="admin-stat">
+                        <span class="admin-stat-value" id="adminOccupancyRate">0%</span>
+                        <span class="admin-stat-label">Taux occupation</span>
+                    </div>
+                </div>
+
+                <!-- Gestion des places -->
+                <div class="admin-section">
+                    <h3>🅿️ Gestion des places</h3>
+                    <div class="admin-places-control">
+                        <div class="form-group">
+                            <label>Nombre total de places</label>
+                            <div class="input-group">
+                                <input type="number" id="adminTotalSpots" class="form-control" min="5" max="50" value="10">
+                                <button id="updateSpotsBtn" class="btn btn-primary">Mettre à jour</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="admin-places-list" id="adminPlacesList">
+                        <!-- Généré par JS -->
+                    </div>
+                </div>
+
+                <!-- Gestion des utilisateurs -->
+                <div class="admin-section">
+                    <h3>👥 Utilisateurs</h3>
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Nom</th>
+                                    <th>Email</th>
+                                    <th>Téléphone</th>
+                                    <th>Rôle</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminUsersTable">
+                                <!-- Généré par JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Toutes les réservations -->
+                <div class="admin-section">
+                    <h3>📅 Toutes les réservations</h3>
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Client</th>
+                                    <th>Place</th>
+                                    <th>Date</th>
+                                    <th>Horaire</th>
+                                    <th>Prix</th>
+                                    <th>Statut</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminReservationsTable">
+                                <!-- Généré par JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Graphique d'occupation -->
+                <div class="admin-section">
+                    <h3>📊 Statistiques d'occupation</h3>
+                    <div class="chart-container">
+                        <canvas id="adminOccupancyChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Historique -->
+                <div class="admin-section">
+                    <h3>📜 Historique</h3>
+                    <div class="log-container" id="adminLogContainer">
+                        <!-- Généré par JS -->
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Toast notifications -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="../js/dashboard.js"></script>
+    <script src="../js/map.js"></script>
+    <script src="../js/reservation.js"></script>
+    <script src="../js/admin.js"></script>
+</body>
+</html>
