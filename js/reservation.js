@@ -2,6 +2,8 @@
  * ============================================
  * RESERVATION.JS - Système de réservation
  * Smart Parking - BTS CIEL IR
+ * MODIFIÉ : Suppression du QR code, remplacement
+ *           par une confirmation simple avec badge
  * ============================================
  */
 
@@ -33,7 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initDatePicker();
     initTimeSlots();
     initPricePreview();
-    initPaymentModal();
+    initConfirmationModal(); // MODIFIÉ : était initPaymentModal()
 });
 
 /**
@@ -42,7 +44,6 @@ document.addEventListener('DOMContentLoaded', () => {
 function initReservationForm() {
     const form = document.getElementById('reservationForm');
     if (!form) return;
-    
     form.addEventListener('submit', handleReservationSubmit);
 }
 
@@ -52,8 +53,6 @@ function initReservationForm() {
 function initDatePicker() {
     const dateInput = document.getElementById('resDate');
     if (!dateInput) return;
-    
-    // Date minimum = aujourd'hui
     const today = new Date().toISOString().split('T')[0];
     dateInput.min = today;
     dateInput.value = today;
@@ -65,15 +64,15 @@ function initDatePicker() {
 function initTimeSlots() {
     const select = document.getElementById('resStartTime');
     if (!select) return;
-    
+
     TIME_SLOTS.forEach(time => {
         const option = document.createElement('option');
         option.value = time;
         option.textContent = time;
         select.appendChild(option);
     });
-    
-    // Sélectionner l'heure actuelle + 1h
+
+    // Sélectionner le prochain créneau disponible
     const now = new Date();
     const currentHour = now.getHours();
     const currentMinutes = now.getMinutes();
@@ -81,10 +80,7 @@ function initTimeSlots() {
         const [h, m] = t.split(':').map(Number);
         return h > currentHour || (h === currentHour && m > currentMinutes);
     });
-    
-    if (nextSlot) {
-        select.value = nextSlot;
-    }
+    if (nextSlot) select.value = nextSlot;
 }
 
 /**
@@ -93,10 +89,7 @@ function initTimeSlots() {
 function initPricePreview() {
     const durationSelect = document.getElementById('resDuration');
     if (!durationSelect) return;
-    
     durationSelect.addEventListener('change', updatePricePreview);
-    
-    // Prix initial
     updatePricePreview();
 }
 
@@ -106,243 +99,189 @@ function initPricePreview() {
 function updatePricePreview() {
     const duration = parseInt(document.getElementById('resDuration').value);
     const price = PRICING[duration] || 0;
-    
     document.getElementById('previewPrice').textContent = price + '€';
 }
 
 /**
  * Gère la soumission du formulaire
+ * MODIFIÉ : la réservation est enregistrée ici directement,
+ *           puis le modal de confirmation s'affiche.
  */
 function handleReservationSubmit(e) {
     e.preventDefault();
-    
+
     const user = JSON.parse(localStorage.getItem('smart_parking_user') || 'null');
     if (!user) {
         Dashboard.showToast('Veuillez vous connecter', 'error');
         return;
     }
-    
-    const spotId = parseInt(document.getElementById('resSpot').value);
-    const date = document.getElementById('resDate').value;
+
+    const spotId    = parseInt(document.getElementById('resSpot').value);
+    const date      = document.getElementById('resDate').value;
     const startTime = document.getElementById('resStartTime').value;
-    const duration = parseInt(document.getElementById('resDuration').value);
-    const vehicle = document.getElementById('resVehicle').value;
-    
+    const duration  = parseInt(document.getElementById('resDuration').value);
+    const vehicle   = document.getElementById('resVehicle').value;
+
     if (!spotId || !date || !startTime || !vehicle) {
         Dashboard.showToast('Veuillez remplir tous les champs', 'error');
         return;
     }
-    
+
     // Vérifier que la place est toujours libre
     const spots = JSON.parse(localStorage.getItem('smart_parking_spots') || '[]');
-    const spot = spots.find(s => s.id === spotId);
-    
+    const spot  = spots.find(s => s.id === spotId);
+
     if (!spot || spot.status !== 'free') {
         Dashboard.showToast('Cette place n\'est plus disponible', 'error');
-        // Rafraîchir la carte
-        if (window.ParkingMap) {
-            window.ParkingMap.refresh();
-        }
+        if (window.ParkingMap) window.ParkingMap.refresh();
         return;
     }
-    
+
     // Calculer l'heure de fin
-    const [hours, minutes] = startTime.split(':').map(Number);
     const endDate = new Date(date + 'T' + startTime);
     endDate.setMinutes(endDate.getMinutes() + duration);
     const endTime = endDate.toTimeString().slice(0, 5);
-    
-    // Créer la réservation
+
+    // Construire l'objet réservation
     currentReservation = {
-        id: Date.now(),
-        userId: user.id,
-        userName: user.name,
-        spotId: spotId,
-        spotNumber: spot.number,
-        date: date,
-        startTime: startTime,
-        endTime: endTime,
-        duration: duration,
-        vehicle: vehicle.toUpperCase(),
-        price: PRICING[duration],
-        status: 'pending',
-        createdAt: new Date().toISOString()
+        id:          Date.now(),
+        userId:      user.id,
+        userName:    user.name,
+        spotId:      spotId,
+        spotNumber:  spot.number,
+        date:        date,
+        startTime:   startTime,
+        endTime:     endTime,
+        duration:    duration,
+        vehicle:     vehicle.toUpperCase(),
+        price:       PRICING[duration],
+        status:      'active',
+        createdAt:   new Date().toISOString()
     };
-    
-    // Afficher le modal de paiement
-    showPaymentModal();
+
+    // ---- Enregistrement immédiat (plus de bouton "J'ai payé") ----
+
+    // Sauvegarder la réservation
+    let reservations = JSON.parse(localStorage.getItem('smart_parking_reservations') || '[]');
+    reservations.push(currentReservation);
+    localStorage.setItem('smart_parking_reservations', JSON.stringify(reservations));
+
+    // Mettre la place en "réservée" sur la carte
+    if (window.ParkingMap) {
+        window.ParkingMap.setSpotStatus(currentReservation.spotId, 'reserved');
+    }
+
+    // Ajouter à l'historique admin
+    addToHistory(
+        'Réservation',
+        `Place ${currentReservation.spotNumber} réservée par ${currentReservation.userName} - ${currentReservation.price}€`
+    );
+
+    // Réinitialiser le formulaire
+    document.getElementById('reservationForm').reset();
+    initDatePicker();
+    updatePricePreview();
+
+    // Afficher le modal de confirmation
+    showConfirmationModal();
+}
+
+// ============================================
+// MODAL DE CONFIRMATION (remplace le QR code)
+// ============================================
+
+/**
+ * Initialise les événements du modal de confirmation
+ * REMPLACE : initPaymentModal()
+ */
+function initConfirmationModal() {
+    document.getElementById('closeConfirmationModal')?.addEventListener('click', hideConfirmationModal);
+    document.getElementById('closeConfirmationBtn')?.addEventListener('click', hideConfirmationModal);
 }
 
 /**
- * Initialise le modal de paiement
+ * Affiche le modal de confirmation
+ * REMPLACE : showPaymentModal() + generateQRCode()
  */
-function initPaymentModal() {
-    // Fermer le modal
-    document.getElementById('closePaymentModal')?.addEventListener('click', hidePaymentModal);
-    document.getElementById('cancelPaymentBtn')?.addEventListener('click', hidePaymentModal);
-    
-    // Confirmer le paiement
-    document.getElementById('confirmPaymentBtn')?.addEventListener('click', confirmPayment);
-}
-
-/**
- * Affiche le modal de paiement
- */
-function showPaymentModal() {
+function showConfirmationModal() {
     if (!currentReservation) return;
-    
-    const modal = document.getElementById('paymentModal');
-    
+
+    const modal = document.getElementById('confirmationModal');
+
     // Remplir le récapitulatif
-    document.getElementById('paySpot').textContent = 'Place ' + currentReservation.spotNumber;
-    document.getElementById('payDate').textContent = formatDate(currentReservation.date);
-    document.getElementById('payTime').textContent = currentReservation.startTime + ' - ' + currentReservation.endTime;
+    document.getElementById('paySpot').textContent     = 'Place ' + currentReservation.spotNumber;
+    document.getElementById('payDate').textContent     = formatDate(currentReservation.date);
+    document.getElementById('payTime').textContent     = currentReservation.startTime + ' - ' + currentReservation.endTime;
     document.getElementById('payDuration').textContent = formatDuration(currentReservation.duration);
-    document.getElementById('payTotal').textContent = currentReservation.price + '€';
-    
-    // Générer le QR code
-    generateQRCode();
-    
+    document.getElementById('payTotal').textContent    = currentReservation.price + '€';
+
     // Afficher le modal
     modal.classList.remove('hidden');
 }
 
 /**
- * Cache le modal de paiement
+ * Cache le modal de confirmation
+ * REMPLACE : hidePaymentModal()
  */
-function hidePaymentModal() {
-    document.getElementById('paymentModal').classList.add('hidden');
-}
+function hideConfirmationModal() {
+    document.getElementById('confirmationModal').classList.add('hidden');
 
-/**
- * Génère le QR code
- */
-function generateQRCode() {
-    const container = document.getElementById('qrcode');
-    container.innerHTML = '';
-    
-    // Générer un code de paiement unique
-    const paymentCode = 'PARK' + Date.now().toString().slice(-8);
-    document.getElementById('paymentCode').textContent = paymentCode;
-    
-    // Créer le QR code
-    const qrData = JSON.stringify({
-        type: 'parking_payment',
-        reservationId: currentReservation.id,
-        amount: currentReservation.price,
-        code: paymentCode
-    });
-    
-    // Utiliser QRCode.js si disponible, sinon afficher un faux QR
-    if (typeof QRCode !== 'undefined') {
-        new QRCode(container, {
-            text: qrData,
-            width: 200,
-            height: 200,
-            colorDark: '#000000',
-            colorLight: '#ffffff',
-            correctLevel: QRCode.CorrectLevel.M
-        });
-    } else {
-        // Fallback - afficher un QR code simulé
-        container.innerHTML = `
-            <div style="width: 200px; height: 200px; background: white; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-direction: column;">
-                <div style="font-size: 80px;">📱</div>
-                <div style="color: #333; font-size: 12px; margin-top: 10px;">QR Code de paiement</div>
-            </div>
-        `;
-    }
-}
-
-/**
- * Confirme le paiement
- */
-function confirmPayment() {
-    if (!currentReservation) return;
-    
-    // Mettre à jour le statut
-    currentReservation.status = 'active';
-    
-    // Sauvegarder la réservation
-    let reservations = JSON.parse(localStorage.getItem('smart_parking_reservations') || '[]');
-    reservations.push(currentReservation);
-    localStorage.setItem('smart_parking_reservations', JSON.stringify(reservations));
-    
-    // Mettre à jour le statut de la place
-    if (window.ParkingMap) {
-        window.ParkingMap.setSpotStatus(currentReservation.spotId, 'reserved');
-    }
-    
-    // Ajouter à l'historique admin
-    addToHistory('Réservation', `Place ${currentReservation.spotNumber} réservée par ${currentReservation.userName} - ${currentReservation.price}€`);
-    
-    // Fermer le modal
-    hidePaymentModal();
-    
-    // Réinitialiser le formulaire
-    document.getElementById('reservationForm').reset();
-    initDatePicker();
-    updatePricePreview();
-    
-    // Afficher confirmation
-    Dashboard.showToast('Réservation confirmée !', 'success');
-    
-    // Rediriger vers mes réservations
-    setTimeout(() => {
+    // Rediriger vers "Mes réservations" après fermeture
+    if (window.Dashboard) {
         Dashboard.navigateToPage('my-reservations');
-        document.querySelector('[data-page="my-reservations"]').classList.add('active');
-        document.querySelector('[data-page="reservation"]').classList.remove('active');
-    }, 1500);
+        document.querySelector('[data-page="my-reservations"]')?.classList.add('active');
+        document.querySelector('[data-page="reservation"]')?.classList.remove('active');
+    }
+
+    // Rafraîchir les stats du profil
+    if (window.Dashboard) Dashboard.refreshStats();
 }
 
+// ============================================
+// FONCTIONS UTILITAIRES
+// ============================================
+
 /**
- * Ajoute à l'historique
+ * Ajoute une entrée à l'historique
  */
 function addToHistory(action, details) {
     let history = JSON.parse(localStorage.getItem('smart_parking_history') || '[]');
     history.unshift({
-        id: Date.now(),
-        action: action,
-        details: details,
+        id:        Date.now(),
+        action:    action,
+        details:   details,
         timestamp: new Date().toISOString()
     });
-    
-    // Garder seulement les 100 dernières entrées
-    if (history.length > 100) {
-        history = history.slice(0, 100);
-    }
-    
+    if (history.length > 100) history = history.slice(0, 100);
     localStorage.setItem('smart_parking_history', JSON.stringify(history));
 }
 
 /**
- * Formate une date
+ * Formate une date DD/MM/YYYY
  */
 function formatDate(dateString) {
     const date = new Date(dateString);
     return date.toLocaleDateString('fr-FR', {
-        day: '2-digit',
+        day:   '2-digit',
         month: '2-digit',
-        year: 'numeric'
+        year:  'numeric'
     });
 }
 
 /**
- * Formate une durée
+ * Formate une durée en minutes vers texte lisible
  */
 function formatDuration(minutes) {
-    if (minutes >= 480) {
-        return 'Journée (8h)';
-    } else if (minutes >= 60) {
-        const hours = Math.floor(minutes / 60);
-        const mins = minutes % 60;
-        return mins > 0 ? `${hours}h ${mins}min` : `${hours}h`;
-    } else {
-        return `${minutes} min`;
+    if (minutes >= 480) return 'Journée (8h)';
+    if (minutes >= 60) {
+        const h = Math.floor(minutes / 60);
+        const m = minutes % 60;
+        return m > 0 ? `${h}h ${m}min` : `${h}h`;
     }
+    return `${minutes} min`;
 }
 
-// Exporter les fonctions
+// Exporter les fonctions publiques
 window.Reservation = {
     PRICING,
     TIME_SLOTS,

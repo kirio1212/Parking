@@ -6,8 +6,8 @@
     <title>Smart Parking - Dashboard</title>
     <link rel="stylesheet" href="../css/style.css">
     <link rel="stylesheet" href="../css/dashboard.css">
+    <!-- SUPPRIMÉ : qrcode.min.js (plus nécessaire) -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
     <!-- Header -->
@@ -206,64 +206,64 @@
                         </div>
 
                         <div class="price-preview">
-                            <span>Prix total:</span>
+                            <span>Prix total :</span>
                             <span id="previewPrice" class="price-amount">5€</span>
                         </div>
 
+                        <!-- MODIFIÉ : bouton "Valider la réservation" au lieu de "Procéder au paiement" -->
                         <button type="submit" class="btn btn-primary btn-block">
-                            <span class="btn-icon">💳</span>
-                            Procéder au paiement
+                            <span class="btn-icon">✅</span>
+                            Valider la réservation
                         </button>
                     </form>
                 </div>
 
-                <!-- Modal de paiement QR Code -->
-                <div id="paymentModal" class="modal hidden">
+                <!-- REMPLACÉ : Modal de confirmation (sans QR code) -->
+                <div id="confirmationModal" class="modal hidden">
                     <div class="modal-content">
                         <div class="modal-header">
-                            <h3>💳 Paiement</h3>
-                            <button class="modal-close" id="closePaymentModal">&times;</button>
+                            <h3>🎉 Réservation confirmée</h3>
+                            <button class="modal-close" id="closeConfirmationModal">&times;</button>
                         </div>
                         <div class="modal-body">
+                            <!-- Récapitulatif -->
                             <div class="payment-summary">
                                 <h4>Récapitulatif</h4>
                                 <div class="summary-row">
-                                    <span>Place:</span>
+                                    <span>Place :</span>
                                     <span id="paySpot">-</span>
                                 </div>
                                 <div class="summary-row">
-                                    <span>Date:</span>
+                                    <span>Date :</span>
                                     <span id="payDate">-</span>
                                 </div>
                                 <div class="summary-row">
-                                    <span>Heure:</span>
+                                    <span>Heure :</span>
                                     <span id="payTime">-</span>
                                 </div>
                                 <div class="summary-row">
-                                    <span>Durée:</span>
+                                    <span>Durée :</span>
                                     <span id="payDuration">-</span>
                                 </div>
                                 <div class="summary-row total">
-                                    <span>Total:</span>
+                                    <span>Total :</span>
                                     <span id="payTotal">-</span>
                                 </div>
                             </div>
 
-                            <div class="qr-section">
-                                <p>Scannez ce QR code pour payer</p>
-                                <div id="qrcode"></div>
-                                <p class="qr-info">Ou utilisez le code: <strong id="paymentCode">-</strong></p>
+                            <!-- Message de confirmation -->
+                            <div class="confirmation-message">
+                                <div class="confirmation-icon">🏷️</div>
+                                <h4>Merci pour votre réservation !</h4>
+                                <p>Votre place est bien réservée.<br>
+                                Vous recevrez votre <strong>badge d'accès dans les 24 heures</strong>.</p>
                             </div>
 
-                            <div class="payment-actions">
-                                <button id="confirmPaymentBtn" class="btn btn-success btn-block">
-                                    <span class="btn-icon">✅</span>
-                                    J'ai payé
-                                </button>
-                                <button id="cancelPaymentBtn" class="btn btn-secondary btn-block">
-                                    Annuler
-                                </button>
-                            </div>
+                            <!-- Bouton fermer -->
+                            <button id="closeConfirmationBtn" class="btn btn-primary btn-block">
+                                <span class="btn-icon">✅</span>
+                                Fermer
+                            </button>
                         </div>
                     </div>
                 </div>
