@@ -1,15 +1,22 @@
 version: '3.8'
 
+# ============================================================
+#  Smart Parking v2.0 — Docker Compose
+#  Services : MariaDB + App Node.js + Mosquitto MQTT
+# ============================================================
+
 services:
+
+  # ── Base de données MariaDB ────────────────────────────────
   db:
     image: mariadb:10.11
     container_name: smartparking-db
     restart: always
     environment:
-      MARIADB_ROOT_PASSWORD: rootpassword      # À changer
+      MARIADB_ROOT_PASSWORD: rootpassword        # ⚠️ À changer en production
       MARIADB_DATABASE: smartparking
       MARIADB_USER: smartparking_user
-      MARIADB_PASSWORD: smartparking_pass      # À changer
+      MARIADB_PASSWORD: smartparking_pass        # ⚠️ À changer en production
     volumes:
       - db_data:/var/lib/mysql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -20,6 +27,25 @@ services:
       timeout: 10s
       retries: 5
 
+  # ── Broker MQTT Mosquitto ──────────────────────────────────
+  # Si vous avez déjà Mosquitto installé directement sur le Pi
+  # (pas dans Docker), commentez ce bloc et mettez
+  # MQTT_HOST=localhost dans la section "app" ci-dessous.
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: smartparking-mqtt
+    restart: always
+    ports:
+      - "1883:1883"    # Port MQTT (Arduino se connecte ici)
+      - "9001:9001"    # Port WebSocket (optionnel)
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    networks:
+      - smartparking-network
+
+  # ── Application Node.js ────────────────────────────────────
   app:
     build: .
     container_name: smartparking-app
@@ -29,19 +55,31 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      mqtt:
+        condition: service_started
     environment:
-      DB_HOST: db
-      DB_PORT: 3306
-      DB_USER: smartparking_user
+      # Base de données
+      DB_HOST:     db
+      DB_PORT:     3306
+      DB_USER:     smartparking_user
       DB_PASSWORD: smartparking_pass
-      DB_NAME: smartparking
-      JWT_SECRET: ${JWT_SECRET:-une_chaine_tres_longue_et_secrete}
+      DB_NAME:     smartparking
+      # JWT
+      JWT_SECRET: ${JWT_SECRET:-une_chaine_tres_longue_et_secrete_changez_moi}
+      # MQTT — utiliser "mqtt" si Mosquitto est dans Docker
+      #         utiliser "localhost" si Mosquitto est installé directement sur le Pi
+      MQTT_HOST: mqtt
+      MQTT_PORT: 1883
+      # Environnement
       NODE_ENV: production
+      PORT: 3000
     networks:
       - smartparking-network
 
 volumes:
   db_data:
+  mosquitto_data:
+  mosquitto_log:
 
 networks:
   smartparking-network:

@@ -1,120 +1,163 @@
 /**
  * ============================================
  * MAP.JS - Carte des places de parking
- * Smart Parking - BTS CIEL IR
+ * Smart Parking v2.0
+ * MODIFIÉ : polling API toutes les 3s pour recevoir
+ *           les mises à jour en temps réel depuis Arduino
  * ============================================
  */
 
-// Configuration
 const MAP_CONFIG = {
-    totalSpots: 10,  // Nombre total de places
-    updateInterval: 5000  // Intervalle de mise à jour
+    totalSpots:     10,
+    updateInterval: 3000    // Refresh depuis l'API toutes les 3 secondes
 };
 
-// État des places
 let spotsState = {
-    spots: [],
+    spots:        [],
     selectedSpot: null
 };
 
-// Types de places
-const SPOT_STATUS = {
-    FREE: 'free',
-    OCCUPIED: 'occupied',
-    RESERVED: 'reserved'
-};
+const SPOT_STATUS = { FREE: 'free', OCCUPIED: 'occupied', RESERVED: 'reserved' };
 
-// Initialisation
+// ============================================
+// INITIALISATION
+// ============================================
+
 document.addEventListener('DOMContentLoaded', () => {
     console.log('🗺️ Initialisation de la carte...');
     initParkingMap();
 });
 
-/**
- * Initialise la carte du parking
- */
-function initParkingMap() {
-    // Charger les places depuis le stockage local ou créer les places par défaut
-    loadSpots();
-    
-    // Rendre la carte
+async function initParkingMap() {
+    // Essayer d'abord de charger depuis l'API (données MariaDB + Arduino)
+    const loaded = await loadSpotsFromAPI();
+
+    // Si pas d'API disponible, utiliser le localStorage (mode offline)
+    if (!loaded) {
+        loadSpotsFromStorage();
+    }
+
     renderMap();
-    
-    // Mettre à jour les statistiques
     updateStats();
-    
-    // Mettre à jour le formulaire de réservation
     updateReservationForm();
-    
-    // Démarrer la simulation (si pas admin)
-    if (!isAdmin()) {
-        startSimulation();
+
+    // ⭐ Polling toutes les 3 secondes pour recevoir les updates Arduino
+    startAPIPolling();
+}
+
+// ============================================
+// CHARGEMENT DES PLACES
+// ============================================
+
+/**
+ * Charge les places depuis l'API (MariaDB)
+ * Retourne true si succès, false si hors-ligne
+ */
+async function loadSpotsFromAPI() {
+    try {
+        const token = localStorage.getItem('smart_parking_token');
+        if (!token) return false;
+
+        const response = await fetch('/api/spots', {
+            headers: { 'Authorization': 'Bearer ' + token }
+        });
+
+        if (!response.ok) return false;
+
+        const data = await response.json();
+        if (!data.success || !data.data.length) return false;
+
+        // Convertir le format API → format interne
+        spotsState.spots = data.data.map(s => ({
+            id:         s.id,
+            number:     s.number,
+            status:     s.status,
+            lastUpdate: s.last_update,
+            sensorId:   s.sensor_id
+        }));
+
+        // Synchroniser avec localStorage pour le mode offline
+        saveSpots();
+        return true;
+
+    } catch (_err) {
+        // Serveur non joignable → mode offline
+        return false;
     }
 }
 
 /**
- * Charge les places
+ * Charge les places depuis le localStorage (mode offline)
  */
-function loadSpots() {
+function loadSpotsFromStorage() {
     const stored = localStorage.getItem('smart_parking_spots');
-    
     if (stored) {
         spotsState.spots = JSON.parse(stored);
     } else {
-        // Créer les places par défaut
         createDefaultSpots();
     }
 }
 
-/**
- * Crée les places par défaut
- */
 function createDefaultSpots() {
     spotsState.spots = [];
-    
     for (let i = 1; i <= MAP_CONFIG.totalSpots; i++) {
-        // Distribution: 60% libre, 25% occupé, 15% réservé
-        const rand = Math.random();
-        let status = SPOT_STATUS.FREE;
-        
-        if (rand > 0.85) {
-            status = SPOT_STATUS.RESERVED;
-        } else if (rand > 0.60) {
-            status = SPOT_STATUS.OCCUPIED;
-        }
-        
         spotsState.spots.push({
-            id: i,
-            number: i,
-            status: status,
+            id:         i,
+            number:     i,
+            status:     SPOT_STATUS.FREE,
             lastUpdate: new Date().toISOString(),
-            sensorId: `SENSOR_${String(i).padStart(3, '0')}`
+            sensorId:   `SENSOR_${String(i).padStart(3, '0')}`
         });
     }
-    
     saveSpots();
 }
 
-/**
- * Sauvegarde les places
- */
 function saveSpots() {
     localStorage.setItem('smart_parking_spots', JSON.stringify(spotsState.spots));
 }
 
+// ============================================
+// ⭐ POLLING TEMPS RÉEL (mises à jour Arduino)
+// ============================================
+
 /**
- * Rend la carte
+ * Interroge l'API toutes les 3 secondes.
+ * Si l'Arduino a changé l'état d'une place via MQTT,
+ * la carte se met à jour automatiquement.
  */
+function startAPIPolling() {
+    setInterval(async () => {
+        const loaded = await loadSpotsFromAPI();
+        if (loaded) {
+            renderMap();
+            updateStats();
+            updateReservationForm();
+            // Rafraîchir les détails si une place est sélectionnée
+            if (spotsState.selectedSpot) {
+                const updated = spotsState.spots.find(s => s.id === spotsState.selectedSpot.id);
+                if (updated) {
+                    spotsState.selectedSpot = updated;
+                    showSpotDetails(updated);
+                }
+            }
+        }
+    }, MAP_CONFIG.updateInterval);
+}
+
+// ============================================
+// RENDU DE LA CARTE
+// ============================================
+
 function renderMap() {
     const mapContainer = document.getElementById('parkingMap');
     if (!mapContainer) return;
-    
+
     mapContainer.innerHTML = spotsState.spots.map(spot => `
-        <div 
-            class="parking-spot ${spot.status}" 
+        <div
+            class="parking-spot ${spot.status}"
             data-id="${spot.id}"
             onclick="handleSpotClick(${spot.id})"
-            title="Place ${spot.number} - ${getStatusLabel(spot.status)}"
+            title="Place ${spot.number} — ${getStatusLabel(spot.status)}"
         >
             <span class="spot-number">${spot.number}</span>
             <span class="spot-icon">${getStatusIcon(spot.status)}</span>
@@ -122,27 +165,21 @@ function renderMap() {
     `).join('');
 }
 
-/**
- * Gère le clic sur une place
- */
 function handleSpotClick(spotId) {
     const spot = spotsState.spots.find(s => s.id === spotId);
     if (!spot) return;
-    
     spotsState.selectedSpot = spot;
     showSpotDetails(spot);
 }
 
-/**
- * Affiche les détails d'une place
- */
 function showSpotDetails(spot) {
     const container = document.getElementById('spotDetails');
     if (!container) return;
-    
-    const isReserved = spot.status === SPOT_STATUS.RESERVED;
-    const reservation = isReserved ? findReservationForSpot(spot.id) : null;
-    
+
+    const reservation = spot.status === SPOT_STATUS.RESERVED
+        ? findReservationForSpot(spot.id)
+        : null;
+
     container.innerHTML = `
         <div class="spot-info-detail">
             <div class="spot-info-row">
@@ -157,7 +194,7 @@ function showSpotDetails(spot) {
             </div>
             <div class="spot-info-row">
                 <span class="spot-info-label">Capteur</span>
-                <span class="spot-info-value">${spot.sensorId}</span>
+                <span class="spot-info-value">${spot.sensorId || 'N/A'}</span>
             </div>
             <div class="spot-info-row">
                 <span class="spot-info-label">Dernière mise à jour</span>
@@ -174,7 +211,8 @@ function showSpotDetails(spot) {
                 </div>
             ` : ''}
             ${spot.status === SPOT_STATUS.FREE ? `
-                <button class="btn btn-primary btn-block" onclick="Dashboard.navigateToPage('reservation'); selectSpotForReservation(${spot.id});">
+                <button class="btn btn-primary btn-block"
+                    onclick="Dashboard.navigateToPage('reservation'); selectSpotForReservation(${spot.id});">
                     <span class="btn-icon">📅</span>
                     Réserver cette place
                 </button>
@@ -183,184 +221,144 @@ function showSpotDetails(spot) {
     `;
 }
 
-/**
- * Trouve la réservation pour une place
- */
 function findReservationForSpot(spotId) {
     const reservations = JSON.parse(localStorage.getItem('smart_parking_reservations') || '[]');
     return reservations.find(r => r.spotId === spotId && r.status === 'active');
 }
 
-/**
- * Met à jour les statistiques
- */
+// ============================================
+// STATISTIQUES & FORMULAIRE
+// ============================================
+
 function updateStats() {
-    const free = spotsState.spots.filter(s => s.status === SPOT_STATUS.FREE).length;
+    const free     = spotsState.spots.filter(s => s.status === SPOT_STATUS.FREE).length;
     const occupied = spotsState.spots.filter(s => s.status === SPOT_STATUS.OCCUPIED).length;
     const reserved = spotsState.spots.filter(s => s.status === SPOT_STATUS.RESERVED).length;
-    
-    document.getElementById('freeCount').textContent = free;
+
+    document.getElementById('freeCount').textContent     = free;
     document.getElementById('occupiedCount').textContent = occupied;
     document.getElementById('reservedCount').textContent = reserved;
-    document.getElementById('totalCount').textContent = spotsState.spots.length;
+    document.getElementById('totalCount').textContent    = spotsState.spots.length;
 }
 
-/**
- * Met à jour le formulaire de réservation
- */
 function updateReservationForm() {
     const select = document.getElementById('resSpot');
     if (!select) return;
-    
-    // Garder la première option
+
     const firstOption = select.options[0];
     select.innerHTML = '';
     select.appendChild(firstOption);
-    
-    // Ajouter uniquement les places libres
-    const freeSpots = spotsState.spots.filter(s => s.status === SPOT_STATUS.FREE);
-    
-    freeSpots.forEach(spot => {
-        const option = document.createElement('option');
-        option.value = spot.id;
-        option.textContent = `Place ${spot.number}`;
-        select.appendChild(option);
-    });
+
+    spotsState.spots
+        .filter(s => s.status === SPOT_STATUS.FREE)
+        .forEach(spot => {
+            const option = document.createElement('option');
+            option.value       = spot.id;
+            option.textContent = `Place ${spot.number}`;
+            select.appendChild(option);
+        });
 }
 
-/**
- * Sélectionne une place pour la réservation
- */
 function selectSpotForReservation(spotId) {
     const select = document.getElementById('resSpot');
-    if (select) {
-        select.value = spotId;
-    }
+    if (select) select.value = spotId;
 }
 
-/**
- * Définit le statut d'une place
- */
-function setSpotStatus(spotId, status) {
+// ============================================
+// ACTIONS ADMIN & SIMULATION
+// ============================================
+
+async function setSpotStatus(spotId, status) {
     const spot = spotsState.spots.find(s => s.id === spotId || s.number === spotId);
-    if (spot) {
-        spot.status = status;
-        spot.lastUpdate = new Date().toISOString();
-        saveSpots();
-        renderMap();
-        updateStats();
-        updateReservationForm();
-    }
-}
+    if (!spot) return;
 
-/**
- * Change le nombre total de places
- */
-function setTotalSpots(count) {
-    MAP_CONFIG.totalSpots = count;
-    
-    // Ajuster le tableau des places
-    if (count > spotsState.spots.length) {
-        // Ajouter des places
-        for (let i = spotsState.spots.length + 1; i <= count; i++) {
-            spotsState.spots.push({
-                id: i,
-                number: i,
-                status: SPOT_STATUS.FREE,
-                lastUpdate: new Date().toISOString(),
-                sensorId: `SENSOR_${String(i).padStart(3, '0')}`
+    spot.status     = status;
+    spot.lastUpdate = new Date().toISOString();
+    saveSpots();
+    renderMap();
+    updateStats();
+    updateReservationForm();
+
+    // Synchroniser avec l'API si connecté
+    try {
+        const token = localStorage.getItem('smart_parking_token');
+        if (token) {
+            await fetch(`/api/spots/${spot.id}/status`, {
+                method:  'PUT',
+                headers: {
+                    'Content-Type':  'application/json',
+                    'Authorization': 'Bearer ' + token
+                },
+                body: JSON.stringify({ status })
             });
         }
-    } else if (count < spotsState.spots.length) {
-        // Supprimer des places
+    } catch (_err) { /* mode offline */ }
+}
+
+function setTotalSpots(count) {
+    MAP_CONFIG.totalSpots = count;
+    if (count > spotsState.spots.length) {
+        for (let i = spotsState.spots.length + 1; i <= count; i++) {
+            spotsState.spots.push({
+                id: i, number: i,
+                status:     SPOT_STATUS.FREE,
+                lastUpdate: new Date().toISOString(),
+                sensorId:   `SENSOR_${String(i).padStart(3, '0')}`
+            });
+        }
+    } else {
         spotsState.spots = spotsState.spots.slice(0, count);
     }
-    
     saveSpots();
     renderMap();
     updateStats();
     updateReservationForm();
 }
 
-/**
- * Simulation automatique
- */
-function startSimulation() {
-    setInterval(() => {
-        // 20% de chance de changer une place
-        if (Math.random() > 0.8) {
-            const randomSpot = spotsState.spots[Math.floor(Math.random() * spotsState.spots.length)];
-            
-            if (randomSpot.status === SPOT_STATUS.FREE && Math.random() > 0.5) {
-                setSpotStatus(randomSpot.id, SPOT_STATUS.OCCUPIED);
-            } else if (randomSpot.status === SPOT_STATUS.OCCUPIED && Math.random() > 0.3) {
-                setSpotStatus(randomSpot.id, SPOT_STATUS.FREE);
-            }
-        }
-    }, MAP_CONFIG.updateInterval);
-}
+// ============================================
+// UTILITAIRES
+// ============================================
 
-/**
- * Vérifie si l'utilisateur est admin
- */
 function isAdmin() {
     const user = JSON.parse(localStorage.getItem('smart_parking_user') || 'null');
     return user && user.role === 'admin';
 }
 
-/**
- * Retourne le label du statut
- */
 function getStatusLabel(status) {
-    const labels = {
-        [SPOT_STATUS.FREE]: 'Libre',
-        [SPOT_STATUS.OCCUPIED]: 'Occupée',
-        [SPOT_STATUS.RESERVED]: 'Réservée'
-    };
-    return labels[status] || 'Inconnu';
+    return { free: 'Libre', occupied: 'Occupée', reserved: 'Réservée' }[status] || 'Inconnu';
 }
 
-/**
- * Retourne l'icône du statut
- */
 function getStatusIcon(status) {
-    const icons = {
-        [SPOT_STATUS.FREE]: '✓',
-        [SPOT_STATUS.OCCUPIED]: '🚗',
-        [SPOT_STATUS.RESERVED]: '📅'
-    };
-    return icons[status] || '?';
+    return { free: '✓', occupied: '🚗', reserved: '📅' }[status] || '?';
 }
 
-/**
- * Formate une date
- */
 function formatDate(dateString) {
-    const date = new Date(dateString);
-    return date.toLocaleString('fr-FR', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
+    if (!dateString) return 'N/A';
+    return new Date(dateString).toLocaleString('fr-FR', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
     });
 }
 
-// Exporter les fonctions
+// ============================================
+// EXPORT
+// ============================================
+
 window.ParkingMap = {
-    refresh: () => {
-        loadSpots();
+    refresh: async () => {
+        const loaded = await loadSpotsFromAPI();
+        if (!loaded) loadSpotsFromStorage();
         renderMap();
         updateStats();
         updateReservationForm();
     },
     setSpotStatus,
     setTotalSpots,
-    getSpots: () => spotsState.spots,
+    getSpots:     () => spotsState.spots,
     getFreeSpots: () => spotsState.spots.filter(s => s.status === SPOT_STATUS.FREE),
     getStats: () => ({
-        total: spotsState.spots.length,
-        free: spotsState.spots.filter(s => s.status === SPOT_STATUS.FREE).length,
+        total:    spotsState.spots.length,
+        free:     spotsState.spots.filter(s => s.status === SPOT_STATUS.FREE).length,
         occupied: spotsState.spots.filter(s => s.status === SPOT_STATUS.OCCUPIED).length,
         reserved: spotsState.spots.filter(s => s.status === SPOT_STATUS.RESERVED).length
     })

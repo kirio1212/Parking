@@ -1,8 +1,8 @@
 /**
  * ============================================
  * DATABASE.JS - Gestion MariaDB
- * Smart Parking - BTS CIEL IR
- * MODIFIÉ : ajout de getReservationById
+ * Smart Parking v2.0
+ * AJOUTÉ : expireReservations() — libère auto les places
  * ============================================
  */
 
@@ -11,15 +11,19 @@ const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
 const pool = mysql.createPool({
-    host:             process.env.DB_HOST     || 'localhost',
-    port:             process.env.DB_PORT     || 3306,
-    user:             process.env.DB_USER     || 'smartparking_user',
-    password:         process.env.DB_PASSWORD || 'smartparking_pass',
-    database:         process.env.DB_NAME     || 'smartparking',
+    host:               process.env.DB_HOST     || 'localhost',
+    port:               process.env.DB_PORT     || 3306,
+    user:               process.env.DB_USER     || 'smartparking_user',
+    password:           process.env.DB_PASSWORD || 'smartparking_pass',
+    database:           process.env.DB_NAME     || 'smartparking',
     waitForConnections: true,
-    connectionLimit:  10,
-    queueLimit:       0
+    connectionLimit:    10,
+    queueLimit:         0
 });
+
+// ============================================
+// INITIALISATION
+// ============================================
 
 async function initDatabase() {
     try {
@@ -97,9 +101,9 @@ async function initDatabase() {
             )
         `);
 
-        console.log('✅ Tables vérifiées/créées avec succès');
+        console.log('✅ Tables vérifiées/créées');
 
-        // Compte admin par défaut
+        // Admin par défaut
         const [rows] = await pool.query('SELECT id FROM users WHERE email = ?', ['admin@smartparking.fr']);
         if (rows.length === 0) {
             const hashed = await bcrypt.hash('admin123', 10);
@@ -107,27 +111,23 @@ async function initDatabase() {
                 'INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)',
                 ['Administrateur', 'admin@smartparking.fr', '01 23 45 67 89', hashed, 'admin']
             );
-            console.log('✅ Administrateur par défaut créé');
+            console.log('✅ Admin par défaut créé');
         }
 
-        // Places par défaut
+        // 10 places par défaut
         const [spots] = await pool.query('SELECT COUNT(*) AS count FROM spots');
         if (spots[0].count === 0) {
             for (let i = 1; i <= 10; i++) {
-                let status = 'free';
-                const rand = Math.random();
-                if (rand > 0.85)      status = 'reserved';
-                else if (rand > 0.60) status = 'occupied';
                 await pool.query(
                     'INSERT INTO spots (number, sensor_id, status) VALUES (?, ?, ?)',
-                    [i, `SENSOR_${String(i).padStart(3, '0')}`, status]
+                    [i, `SENSOR_${String(i).padStart(3, '0')}`, 'free']
                 );
             }
-            console.log('✅ 10 places par défaut créées');
+            console.log('✅ 10 places créées (toutes libres)');
         }
 
     } catch (err) {
-        console.error("❌ Erreur lors de l'initialisation de la base :", err.message);
+        console.error("❌ Erreur init base :", err.message);
         throw err;
     }
 }
@@ -166,8 +166,10 @@ async function getAllUsers() {
 
 async function updateUser(id, updates) {
     const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-    const values = Object.values(updates);
-    const [result] = await pool.query(`UPDATE users SET ${fields} WHERE id = ?`, [...values, id]);
+    const [result] = await pool.query(
+        `UPDATE users SET ${fields} WHERE id = ?`,
+        [...Object.values(updates), id]
+    );
     return { changed: result.affectedRows };
 }
 
@@ -225,10 +227,6 @@ async function createReservation(userId, spotId, date, startTime, endTime, durat
     return { id: result.insertId };
 }
 
-/**
- * Récupère une réservation par son ID
- * AJOUTÉ : nécessaire pour l'annulation/complétion (libération de la place)
- */
 async function getReservationById(id) {
     const [rows] = await pool.query(
         `SELECT r.*, s.number AS spot_number
@@ -269,6 +267,53 @@ async function updateReservationStatus(id, status) {
         [status, id]
     );
     return { changed: result.affectedRows };
+}
+
+/**
+ * ⭐ NOUVELLE FONCTION — Expiration automatique des réservations
+ *
+ * Cherche toutes les réservations actives dont la date+heure de fin
+ * est déjà dépassée, les passe en "completed" et libère les places.
+ *
+ * Appelée toutes les 60 secondes par server.js.
+ * Cela résout le problème des places qui restent "réservées" indéfiniment.
+ */
+async function expireReservations() {
+    // Trouver les réservations actives dont l'heure de fin est passée
+    const [expiredRows] = await pool.query(`
+        SELECT r.id, r.spot_id, r.user_id, s.number AS spot_number
+        FROM reservations r
+        JOIN spots s ON r.spot_id = s.id
+        WHERE r.status = 'active'
+          AND TIMESTAMP(r.date, r.end_time) < NOW()
+    `);
+
+    for (const res of expiredRows) {
+        // Passer la réservation en "completed"
+        await pool.query(
+            "UPDATE reservations SET status = 'completed' WHERE id = ?",
+            [res.id]
+        );
+
+        // Libérer la place (la passer en "free")
+        // (le capteur Arduino prendra le relais ensuite si une voiture est encore là)
+        await pool.query(
+            "UPDATE spots SET status = 'free', last_update = NOW() WHERE id = ?",
+            [res.spot_id]
+        );
+
+        // Ajouter à l'historique
+        await pool.query(
+            'INSERT INTO history (action, details, user_id) VALUES (?, ?, ?)',
+            [
+                'Expiration réservation',
+                `Réservation #${res.id} expirée — place ${res.spot_number} libérée automatiquement`,
+                res.user_id
+            ]
+        );
+    }
+
+    return expiredRows.length;
 }
 
 // ============================================
@@ -319,7 +364,7 @@ async function getStats(days = 7) {
 }
 
 // ============================================
-// MQTT
+// MQTT EVENTS
 // ============================================
 
 async function recordMqttEvent(topic, message) {
@@ -336,11 +381,11 @@ async function recordMqttEvent(topic, message) {
 
 async function closeDatabase() {
     await pool.end();
-    console.log('🔌 Connexions à la base fermées');
+    console.log('🔌 Connexions base fermées');
 }
 
 module.exports = {
-    pool,   // exposé pour les requêtes directes si besoin
+    pool,
     initDatabase,
     closeDatabase,
     // Utilisateurs
@@ -350,6 +395,7 @@ module.exports = {
     // Réservations
     createReservation, getReservationById, getReservationsByUser,
     getAllReservations, updateReservationStatus,
+    expireReservations,   // ← NOUVEAU
     // Historique
     addHistory, getHistory,
     // Stats
