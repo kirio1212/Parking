@@ -1,9 +1,10 @@
 /**
  * ============================================
  * API ROUTES - Routes de l'API REST
- * Smart Parking - BTS CIEL IR
- * CORRIGÉ : annulation libère bien la place
- *           ajout route /complete pour l'admin
+ * Smart Parking v3.0
+ * CORRIGÉ : réservation vérifie les conflits
+ *           d'horaire au lieu de bloquer la place
+ *           définitivement
  * ============================================
  */
 
@@ -110,11 +111,7 @@ router.post('/spots/init', authenticateToken, requireAdmin, async (req, res) => 
         const spotCount = Math.min(Math.max(parseInt(req.body.count) || 10, 5), 50);
         await db.deleteAllSpots();
         for (let i = 1; i <= spotCount; i++) {
-            let status = 'free';
-            const rand = Math.random();
-            if (rand > 0.85) status = 'reserved';
-            else if (rand > 0.60) status = 'occupied';
-            await db.createSpot(i, `SENSOR_${String(i).padStart(3, '0')}`, status);
+            await db.createSpot(i, `SENSOR_${String(i).padStart(3, '0')}`, 'free');
         }
         await db.addHistory('Réinitialisation places', `${spotCount} places créées`, req.user.id);
         res.json({ success: true, message: `${spotCount} places créées` });
@@ -145,21 +142,71 @@ router.get('/reservations/all', authenticateToken, requireAdmin, async (req, res
     }
 });
 
+/**
+ * POST /api/reservations
+ *
+ * CORRIGÉ : on ne bloque plus la place entière définitivement.
+ * On vérifie uniquement s'il y a un CONFLIT d'horaire sur
+ * la même date et le même créneau.
+ *
+ * Exemple de ce qui est maintenant possible :
+ *   Place 2 — 10h-11h aujourd'hui    ✅
+ *   Place 2 — 14h-15h aujourd'hui    ✅ (pas de conflit)
+ *   Place 2 — 10h-11h demain         ✅ (pas de conflit)
+ *   Place 2 — 10h30-11h30 aujourd'hui ❌ (conflit !)
+ */
 router.post('/reservations', authenticateToken, async (req, res) => {
     try {
         const { spotId, date, startTime, endTime, duration, vehicle, price } = req.body;
+
         if (!spotId || !date || !startTime || !endTime || !duration || !price)
             return res.status(400).json({ success: false, message: 'Tous les champs sont requis' });
+
         const spot = await db.getSpotById(spotId);
-        if (!spot || spot.status !== 'free')
-            return res.status(409).json({ success: false, message: "Cette place n'est plus disponible" });
+        if (!spot)
+            return res.status(404).json({ success: false, message: 'Place introuvable' });
+
+        // CORRIGÉ : bloquer uniquement si une voiture est physiquement là
+        if (spot.status === 'occupied')
+            return res.status(409).json({ success: false, message: "Une voiture est déjà sur cette place" });
+
+        // CORRIGÉ : vérifier les conflits d'horaire au lieu du statut global
+        const conflict = await db.checkReservationConflict(spotId, date, startTime, endTime);
+        if (conflict)
+            return res.status(409).json({
+                success: false,
+                message: `Cette place est déjà réservée sur ce créneau. Choisissez un autre horaire ou une autre date.`
+            });
+
         const paymentCode = 'PARK' + Date.now().toString().slice(-8);
         const result = await db.createReservation(
             req.user.id, spotId, date, startTime, endTime, duration, vehicle, price, paymentCode
         );
-        await db.updateSpotStatus(spotId, 'reserved');
-        await db.addHistory('Nouvelle réservation', `Place ${spot.number} - ${price}EUR`, req.user.id);
-        res.status(201).json({ success: true, message: 'Réservation créée', data: { id: result.id, paymentCode } });
+
+        // On ne change le statut de la place QUE si la réservation est pour aujourd'hui
+        // et que l'heure de début est maintenant ou dans moins de 30 minutes
+        const now      = new Date();
+        const today    = now.toISOString().split('T')[0];
+        const resStart = new Date(`${date}T${startTime}`);
+        const diffMin  = (resStart - now) / 60000;
+
+        if (date === today && diffMin <= 30) {
+            await db.updateSpotStatus(spotId, 'reserved');
+        }
+        // Pour une réservation future, le statut de la place reste inchangé
+        // Le timer d'expiration (server.js) le mettra à jour au bon moment
+
+        await db.addHistory(
+            'Nouvelle réservation',
+            `Place ${spot.number} réservée le ${date} de ${startTime} à ${endTime} — ${price}EUR`,
+            req.user.id
+        );
+
+        res.status(201).json({
+            success: true,
+            message: 'Réservation créée',
+            data: { id: result.id, paymentCode }
+        });
     } catch (err) {
         console.error('❌ Erreur create reservation:', err.message);
         res.status(500).json({ success: false, message: 'Erreur serveur' });
@@ -168,7 +215,6 @@ router.post('/reservations', authenticateToken, async (req, res) => {
 
 /**
  * PUT /api/reservations/:id/cancel
- * CORRIGÉ : libère désormais la place associée
  */
 router.put('/reservations/:id/cancel', authenticateToken, async (req, res) => {
     try {
@@ -179,10 +225,10 @@ router.put('/reservations/:id/cancel', authenticateToken, async (req, res) => {
             return res.status(403).json({ success: false, message: 'Accès refusé' });
 
         await db.updateReservationStatus(req.params.id, 'cancelled');
-        await db.updateSpotStatus(reservation.spot_id, 'free');   // ← BUG CORRIGÉ ICI
+        await db.updateSpotStatus(reservation.spot_id, 'free');
         await db.addHistory(
             'Annulation réservation',
-            `Reservation #${req.params.id} annulee - place ${reservation.spot_id} liberee`,
+            `Réservation #${req.params.id} annulée — place ${reservation.spot_number} libérée`,
             req.user.id
         );
         res.json({ success: true, message: 'Réservation annulée' });
@@ -193,7 +239,7 @@ router.put('/reservations/:id/cancel', authenticateToken, async (req, res) => {
 });
 
 /**
- * PUT /api/reservations/:id/complete  (admin uniquement)
+ * PUT /api/reservations/:id/complete (admin)
  */
 router.put('/reservations/:id/complete', authenticateToken, requireAdmin, async (req, res) => {
     try {
@@ -205,7 +251,7 @@ router.put('/reservations/:id/complete', authenticateToken, requireAdmin, async 
         await db.updateSpotStatus(reservation.spot_id, 'free');
         await db.addHistory(
             'Réservation terminée',
-            `Reservation #${req.params.id} terminee - place ${reservation.spot_id} liberee`,
+            `Réservation #${req.params.id} terminée — place ${reservation.spot_number} libérée`,
             req.user.id
         );
         res.json({ success: true, message: 'Réservation terminée' });
@@ -221,11 +267,11 @@ router.put('/reservations/:id/complete', authenticateToken, requireAdmin, async 
 
 router.get('/stats', authenticateToken, async (req, res) => {
     try {
-        const spots = await db.getAllSpots();
-        const total = spots.length;
-        const free  = spots.filter(s => s.status === 'free').length;
-        const occupied = spots.filter(s => s.status === 'occupied').length;
-        const reserved = spots.filter(s => s.status === 'reserved').length;
+        const spots        = await db.getAllSpots();
+        const total        = spots.length;
+        const free         = spots.filter(s => s.status === 'free').length;
+        const occupied     = spots.filter(s => s.status === 'occupied').length;
+        const reserved     = spots.filter(s => s.status === 'reserved').length;
         const occupancyRate = total > 0 ? Math.round(((occupied + reserved) / total) * 100) : 0;
         res.json({ success: true, data: { total, free, occupied, reserved, occupancyRate } });
     } catch (err) {
@@ -244,7 +290,7 @@ router.get('/history', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 router.get('/status', (_req, res) => {
-    res.json({ success: true, message: 'Smart Parking API operationnelle', version: '1.0.0', timestamp: new Date().toISOString() });
+    res.json({ success: true, message: 'Smart Parking API opérationnelle', version: '3.0.0', timestamp: new Date().toISOString() });
 });
 
 module.exports = router;

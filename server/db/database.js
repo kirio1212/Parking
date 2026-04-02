@@ -1,8 +1,10 @@
 /**
  * ============================================
  * DATABASE.JS - Gestion MariaDB
- * Smart Parking v2.0
- * AJOUTÉ : expireReservations() — libère auto les places
+ * Smart Parking v3.0
+ * AJOUTÉ : checkReservationConflict()
+ *          → vérifie les conflits d'horaire
+ *            au lieu de bloquer toute la place
  * ============================================
  */
 
@@ -123,7 +125,7 @@ async function initDatabase() {
                     [i, `SENSOR_${String(i).padStart(3, '0')}`, 'free']
                 );
             }
-            console.log('✅ 10 places créées (toutes libres)');
+            console.log('✅ 10 places créées');
         }
 
     } catch (err) {
@@ -227,6 +229,34 @@ async function createReservation(userId, spotId, date, startTime, endTime, durat
     return { id: result.insertId };
 }
 
+/**
+ * ⭐ NOUVELLE FONCTION — Vérification des conflits d'horaire
+ *
+ * Problème corrigé : avant, quand une place était réservée,
+ * elle restait bloquée pour TOUS les jours et TOUTES les heures.
+ *
+ * Maintenant on vérifie uniquement s'il y a une réservation
+ * qui se chevauche sur la MÊME date et le MÊME créneau horaire.
+ *
+ * Exemple :
+ *   Place 2 réservée aujourd'hui 10h-11h ✅
+ *   Place 2 réservée aujourd'hui 14h-15h ✅ (pas de conflit)
+ *   Place 2 réservée demain 10h-11h       ✅ (pas de conflit)
+ *   Place 2 réservée aujourd'hui 10h30-11h30 ❌ (conflit !)
+ */
+async function checkReservationConflict(spotId, date, startTime, endTime) {
+    const [rows] = await pool.query(`
+        SELECT id FROM reservations
+        WHERE spot_id = ?
+          AND date = ?
+          AND status IN ('active', 'pending')
+          AND start_time < ?
+          AND end_time > ?
+    `, [spotId, date, endTime, startTime]);
+
+    return rows.length > 0;  // true = conflit, false = créneau libre
+}
+
 async function getReservationById(id) {
     const [rows] = await pool.query(
         `SELECT r.*, s.number AS spot_number
@@ -270,16 +300,10 @@ async function updateReservationStatus(id, status) {
 }
 
 /**
- * ⭐ NOUVELLE FONCTION — Expiration automatique des réservations
- *
- * Cherche toutes les réservations actives dont la date+heure de fin
- * est déjà dépassée, les passe en "completed" et libère les places.
- *
- * Appelée toutes les 60 secondes par server.js.
- * Cela résout le problème des places qui restent "réservées" indéfiniment.
+ * Expiration automatique des réservations
+ * Appelée toutes les 60 secondes par server.js
  */
 async function expireReservations() {
-    // Trouver les réservations actives dont l'heure de fin est passée
     const [expiredRows] = await pool.query(`
         SELECT r.id, r.spot_id, r.user_id, s.number AS spot_number
         FROM reservations r
@@ -289,20 +313,14 @@ async function expireReservations() {
     `);
 
     for (const res of expiredRows) {
-        // Passer la réservation en "completed"
         await pool.query(
             "UPDATE reservations SET status = 'completed' WHERE id = ?",
             [res.id]
         );
-
-        // Libérer la place (la passer en "free")
-        // (le capteur Arduino prendra le relais ensuite si une voiture est encore là)
         await pool.query(
             "UPDATE spots SET status = 'free', last_update = NOW() WHERE id = ?",
             [res.spot_id]
         );
-
-        // Ajouter à l'historique
         await pool.query(
             'INSERT INTO history (action, details, user_id) VALUES (?, ?, ?)',
             [
@@ -364,7 +382,7 @@ async function getStats(days = 7) {
 }
 
 // ============================================
-// MQTT EVENTS
+// MQTT
 // ============================================
 
 async function recordMqttEvent(topic, message) {
@@ -388,18 +406,13 @@ module.exports = {
     pool,
     initDatabase,
     closeDatabase,
-    // Utilisateurs
     createUser, getUserByEmail, getUserById, getAllUsers, updateUser, deleteUser,
-    // Places
     createSpot, getAllSpots, getSpotById, updateSpotStatus, deleteAllSpots,
-    // Réservations
-    createReservation, getReservationById, getReservationsByUser,
+    createReservation, checkReservationConflict,
+    getReservationById, getReservationsByUser,
     getAllReservations, updateReservationStatus,
-    expireReservations,   // ← NOUVEAU
-    // Historique
+    expireReservations,
     addHistory, getHistory,
-    // Stats
     recordStats, getStats,
-    // MQTT
     recordMqttEvent
 };
